@@ -30,8 +30,10 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.openmrs.CareSetting;
 import org.openmrs.Concept;
+import org.openmrs.ConceptClass;
 import org.openmrs.ConceptDatatype;
 import org.openmrs.ConceptName;
+import org.openmrs.ConceptNameTag;
 import org.openmrs.DosingInstructions;
 import org.openmrs.Drug;
 import org.openmrs.DrugOrder;
@@ -64,6 +66,7 @@ import org.openmrs.ProgramWorkflowState;
 import org.openmrs.Provider;
 import org.openmrs.User;
 import org.openmrs.api.APIException;
+import org.openmrs.api.ConceptNameType;
 import org.openmrs.api.context.Context;
 import org.openmrs.api.db.hibernate.HibernateUtil;
 import org.openmrs.messagesource.MessageSourceService;
@@ -71,7 +74,7 @@ import org.openmrs.module.htmlformentry.FormEntryContext.Mode;
 import org.openmrs.module.htmlformentry.action.FormSubmissionControllerAction;
 import org.openmrs.module.htmlformentry.action.ObsGroupAction;
 import org.openmrs.module.htmlformentry.compatibility.EncounterCompatibility;
-import org.openmrs.module.htmlformentry.element.DrugOrderSubmissionElement;
+import org.openmrs.module.htmlformentry.element.OrderSubmissionElement;
 import org.openmrs.module.htmlformentry.element.ObsSubmissionElement;
 import org.openmrs.module.htmlformentry.element.ProviderStub;
 import org.openmrs.module.htmlformentry.schema.HtmlFormSchema;
@@ -664,7 +667,7 @@ public class HtmlFormEntryUtil {
 	 */
 	public static boolean isADrugOrderType(OrderType orderType) {
 		try {
-			return orderType.getJavaClass() == DrugOrder.class;
+			return DrugOrder.class.isAssignableFrom(orderType.getJavaClass());
 		}
 		catch (Exception e) {
 			return false;
@@ -685,87 +688,55 @@ public class HtmlFormEntryUtil {
 	}
 	
 	/**
-	 * If the implementation has the standard drug order type referenced by a core constant, return that
-	 * Next, try to find an Order Type named "Drug Order" Otherwise, return the first Order Type in the
-	 * system that is a Drug Order type
+	 * @return all orders for a patient, ordered by date, accounting for previous orders
 	 */
-	public static OrderType getDrugOrderType() {
-		OrderType ot = Context.getOrderService().getOrderTypeByUuid(OrderType.DRUG_ORDER_TYPE_UUID);
-		if (ot == null) {
-			ot = Context.getOrderService().getOrderTypeByName("Drug Order");
-			if (ot == null) {
-				for (OrderType orderType : Context.getOrderService().getOrderTypes(false)) {
-					if (isADrugOrderType(orderType)) {
-						ot = orderType;
-					}
-				}
-			}
-		}
-		return ot;
-	}
-	
-	/**
-	 * @return all drug orders for a patient, ordered by date, accounting for previous orders
-	 */
-	public static Map<Drug, List<DrugOrder>> getDrugOrdersForPatient(Patient patient, Set<Drug> drugs) {
-		Map<Drug, List<DrugOrder>> ret = new HashMap<>();
+	public static List<Order> getOrdersForPatient(Patient patient, Set<Concept> concepts) {
+		List<Order> ret = new ArrayList<>();
 		List<Order> orders = Context.getOrderService().getAllOrdersByPatient(patient);
 		for (Order order : orders) {
 			order = HibernateUtil.getRealObjectFromProxy(order);
-			if (order instanceof DrugOrder && BooleanUtils.isNotTrue(order.getVoided())) {
-				DrugOrder drugOrder = (DrugOrder) order;
-				if (drugs == null || drugs.contains(drugOrder.getDrug())) {
-					List<DrugOrder> existing = ret.get(drugOrder.getDrug());
-					if (existing == null) {
-						existing = new ArrayList<>();
-						ret.put(drugOrder.getDrug(), existing);
-					}
-					existing.add(drugOrder);
+			if (BooleanUtils.isNotTrue(order.getVoided())) {
+				if (concepts.contains(order.getConcept())) {
+					ret.add(order);
 				}
 			}
 		}
-		for (List<DrugOrder> l : ret.values()) {
-			sortDrugOrders(l);
-		}
+		sortOrders(ret);
 		return ret;
 	}
 	
 	/**
-	 * Sorts the given drug orders in place. This first determines if a given order is a revision of an
+	 * Sorts the given orders in place. This first determines if a given order is a revision of an
 	 * order, if so it is later Otherwise, it compares effectiveStartDate Otherwise, it compares
 	 * effectiveStopDate, where a null stop date is later than a non-null one
 	 */
-	public static void sortDrugOrders(List<DrugOrder> drugOrders) {
-		if (drugOrders != null && drugOrders.size() > 1) {
-			Collections.sort(drugOrders, new Comparator<DrugOrder>() {
-				
-				@Override
-				public int compare(DrugOrder d1, DrugOrder d2) {
-					// Get all of the previous orders for d1.  If any are d2, then d1 is later
-					for (Order d1Prev = d1.getPreviousOrder(); d1Prev != null; d1Prev = d1Prev.getPreviousOrder()) {
-						if (d1Prev.equals(d2)) {
-							return 1;
-						}
+	public static void sortOrders(List<Order> orders) {
+		if (orders != null && orders.size() > 1) {
+			Collections.sort(orders, (d1, d2) -> {
+				// Get all of the previous orders for d1.  If any are d2, then d1 is later
+				for (Order d1Prev = d1.getPreviousOrder(); d1Prev != null; d1Prev = d1Prev.getPreviousOrder()) {
+					if (d1Prev.equals(d2)) {
+						return 1;
 					}
-					// Get all of the previous orders for d2.  If any are d1, then d2 is later
-					for (Order d2Prev = d2.getPreviousOrder(); d2Prev != null; d2Prev = d2Prev.getPreviousOrder()) {
-						if (d2Prev.equals(d1)) {
-							return -1;
-						}
-					}
-					// If neither is a revision of the other, then compare based on effective start date
-					int dateCompare = d1.getEffectiveStartDate().compareTo(d2.getEffectiveStartDate());
-					if (dateCompare != 0) {
-						return dateCompare;
-					}
-					// If they are still the same, then order based on end date
-					int ret = OpenmrsUtil.compareWithNullAsLatest(d1.getEffectiveStopDate(), d2.getEffectiveStopDate());
-					if (ret == 0) {
-						// Finally, order based on orderId
-						ret = d1.getOrderId().compareTo(d2.getOrderId());
-					}
-					return ret;
 				}
+				// Get all of the previous orders for d2.  If any are d1, then d2 is later
+				for (Order d2Prev = d2.getPreviousOrder(); d2Prev != null; d2Prev = d2Prev.getPreviousOrder()) {
+					if (d2Prev.equals(d1)) {
+						return -1;
+					}
+				}
+				// If neither is a revision of the other, then compare based on effective start date
+				int dateCompare = d1.getEffectiveStartDate().compareTo(d2.getEffectiveStartDate());
+				if (dateCompare != 0) {
+					return dateCompare;
+				}
+				// If they are still the same, then order based on end date
+				int ret = OpenmrsUtil.compareWithNullAsLatest(d1.getEffectiveStopDate(), d2.getEffectiveStopDate());
+				if (ret == 0) {
+					// Finally, order based on orderId
+					ret = d1.getOrderId().compareTo(d2.getOrderId());
+				}
+				return ret;
 			});
 		}
 	}
@@ -1454,6 +1425,68 @@ public class HtmlFormEntryUtil {
 		return null;
 	}
 	
+	public static ConceptClass getConceptClass(String lookup) {
+		ConceptClass ret = null;
+		if (StringUtils.isNotBlank(lookup)) {
+			try {
+				ret = Context.getConceptService().getConceptClassByUuid(lookup);
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptClassByName(lookup);
+				}
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptClass(Integer.parseInt(lookup));
+				}
+			}
+			catch (Exception e) {}
+		}
+		return ret;
+	}
+	
+	public static ConceptDatatype getConceptDatatype(String lookup) {
+		ConceptDatatype ret = null;
+		if (StringUtils.isNotBlank(lookup)) {
+			try {
+				ret = Context.getConceptService().getConceptDatatypeByUuid(lookup);
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptDatatypeByName(lookup);
+				}
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptDatatype(Integer.parseInt(lookup));
+				}
+			}
+			catch (Exception e) {}
+		}
+		return ret;
+	}
+	
+	public static ConceptNameType getConceptNameType(String lookup) {
+		ConceptNameType ret = null;
+		if (StringUtils.isNotBlank(lookup)) {
+			try {
+				return ConceptNameType.valueOf(lookup);
+			}
+			catch (Exception e) {}
+		}
+		return ret;
+	}
+	
+	public static ConceptNameTag getConceptNameTag(String lookup) {
+		ConceptNameTag ret = null;
+		if (StringUtils.isNotBlank(lookup)) {
+			try {
+				ret = Context.getConceptService().getConceptNameTagByUuid(lookup);
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptNameTagByName(lookup);
+				}
+				if (ret == null) {
+					ret = Context.getConceptService().getConceptNameTag(Integer.parseInt(lookup));
+				}
+			}
+			catch (Exception e) {}
+		}
+		return ret;
+	}
+	
 	/**
 	 * Finds the first ancestor (including the current location) that is tagged with the specified
 	 * location tag
@@ -1648,8 +1681,8 @@ public class HtmlFormEntryUtil {
 						matchedObs.add(oga.getExistingGroup());
 					}
 				}
-				if (lfca instanceof DrugOrderSubmissionElement) {
-					DrugOrderSubmissionElement dse = (DrugOrderSubmissionElement) lfca;
+				if (lfca instanceof OrderSubmissionElement) {
+					OrderSubmissionElement dse = (OrderSubmissionElement) lfca;
 					matchedOrders.addAll(dse.getExistingOrders());
 				}
 			}

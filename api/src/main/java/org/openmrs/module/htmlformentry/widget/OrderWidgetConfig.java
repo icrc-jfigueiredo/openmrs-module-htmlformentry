@@ -6,17 +6,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.openmrs.module.htmlformentry.schema.DrugOrderField;
+import org.openmrs.Concept;
+import org.openmrs.Drug;
+import org.openmrs.module.htmlformentry.schema.OrderField;
 
 /**
- * Holds the configuration for a DrugOrderWidget This mainly serves as an object into which the
- * DrugOrderTagHandler can store the configuration following parsing, validating, and processing all
- * of the xml tag configuration in the htmlform, and enables passing this configuration to the
- * various widgets that are used to appropriately render the controls
+ * Holds the configuration for an OrderWidget This mainly serves as an object into which the
+ * OrderTagHandler can store the configuration following parsing, validating, and processing all of
+ * the xml tag configuration in the htmlform, and enables passing this configuration to the various
+ * widgets that are used to appropriately render the controls
  */
-public class DrugOrderWidgetConfig {
+public class OrderWidgetConfig {
 	
-	private DrugOrderField drugOrderField;
+	private OrderField orderField;
 	
 	private Map<String, String> attributes;
 	
@@ -28,7 +30,11 @@ public class DrugOrderWidgetConfig {
 	
 	private Map<String, List<Option>> orderPropertyOptions;
 	
-	public DrugOrderWidgetConfig() {
+	// Serves to provide access to the orderables configured
+	
+	private Map<Concept, List<Drug>> conceptsAndDrugsConfigured = new HashMap<>();
+	
+	public OrderWidgetConfig() {
 	}
 	
 	// INSTANCE METHODS
@@ -39,12 +45,12 @@ public class DrugOrderWidgetConfig {
 	
 	// PROPERTY ACCESSORS
 	
-	public DrugOrderField getDrugOrderField() {
-		return drugOrderField;
+	public OrderField getOrderField() {
+		return orderField;
 	}
 	
-	public void setDrugOrderField(DrugOrderField drugOrderField) {
-		this.drugOrderField = drugOrderField;
+	public void setOrderField(OrderField orderField) {
+		this.orderField = orderField;
 	}
 	
 	public Map<String, String> getAttributes() {
@@ -102,11 +108,31 @@ public class DrugOrderWidgetConfig {
 		return l;
 	}
 	
+	public Option getOption(String property, String value) {
+		for (Option o : getOrderPropertyOptions(property)) {
+			if (o.getValue().equalsIgnoreCase(value)) {
+				return o;
+			}
+		}
+		return null;
+	}
+	
 	public void setOrderPropertyOptions(String property, List<Option> options) {
 		getOrderPropertyOptions().put(property, options);
 	}
 	
 	public void addOrderPropertyOption(String property, Option option) {
 		getOrderPropertyOptions(property).add(option);
+	}
+	
+	public Map<Concept, List<Drug>> getConceptsAndDrugsConfigured() {
+		if (conceptsAndDrugsConfigured == null) {
+			conceptsAndDrugsConfigured = new LinkedHashMap<>();
+		}
+		return conceptsAndDrugsConfigured;
+	}
+	
+	public void setConceptsAndDrugsConfigured(Map<Concept, List<Drug>> conceptsAndDrugsConfigured) {
+		this.conceptsAndDrugsConfigured = conceptsAndDrugsConfigured;
 	}
 }
